@@ -1,0 +1,247 @@
+{
+  "name": "RRT Automations",
+  "nodes": [
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "/**\n * RRT Automations — Build KPI response e-mail\n * Code node · Mode: \"Run Once for Each Item\"\n *\n * In : $json            -> matched Google Sheets row (recipient lookup)\n *      KoBoToolbox item -> the raw survey submission\n * Out: { email, subject, html }\n *\n * Every field read goes through a null-safe helper, so a question the\n * enumerator skipped can no longer crash the whole execution.\n */\n\n/* ── Config ─────────────────────────────────────────────────────────── */\nconst HIDE_EMPTY = true;                       // false = print every field, even blanks\nconst BANNER     = 'https://i.imgur.com/qBBpOGI.jpeg';\nconst BRAND       = '#1b5e20';   // forest green  — primary: chrome, sales\nconst ACCENT      = '#a8471a';   // burnt orange  — secondary: payments\nconst ACCENT_SOFT = '#fdf0e8';\nconst ACCENT_LINE = '#f0d7c6';\nconst BRAND_SOFT  = '#e4f1e5';\nconst BRAND_LINE  = '#cfe3d0';\nconst INK         = '#1f2a22';\nconst MUTED       = '#6b7669';\nconst LINE        = '#e3e9e2';\nconst SOFT        = '#f2f7f1';\nconst PAGE        = '#edf1ec';\n\nconst k   = $('KoBoToolbox Trigger').item.json;\nconst row = $json;\n\n/* ── Value helpers ──────────────────────────────────────────────────── */\nconst val = (p) => {\n  const v = k[p];\n  return v === undefined || v === null || String(v).trim() === '' ? null : String(v).trim();\n};\nconst num = (p) => {\n  const v = val(p);\n  if (v === null) return null;\n  const n = Number(v.replace(/[^0-9.\\-]/g, ''));\n  return Number.isFinite(n) ? n : null;\n};\nconst fmt   = (n) => (n === null ? null : n.toLocaleString('en-US'));\nconst money = (p) => fmt(num(p));\nconst upper = (p) => { const v = val(p); return v ? v.toUpperCase() : null; };\nconst tail  = (p) => { const v = val(p); return v ? v.split('_').pop().toUpperCase() : null; };\nconst multi = (p) => { const v = val(p); return v ? v.split(/\\s+/).map((s) => s.replace(/_/g, ' ').toUpperCase()) : []; };\nconst yn    = (p) => { const v = val(p); return v ? v.replace(/_/g, ' ').toUpperCase() : null; };\nconst esc   = (s) => String(s ?? '')\n  .replace(/&/g, '&amp;').replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n\nconst asDate = (s, withTime = false) => {\n  if (!s) return null;\n  const d = new Date(s);\n  if (isNaN(d.getTime())) return s;\n  const date = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });\n  return withTime ? `${date}, ${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : date;\n};\n\n/* ── HTML building blocks ───────────────────────────────────────────── */\nconst F = 'Arial,Helvetica,sans-serif';\n\nconst line = (label, value, opt = {}) => {\n  const blank = value === null || value === undefined || value === '';\n  if (blank && HIDE_EMPTY && !opt.always) return '';\n  const shown = blank ? '&mdash;' : (opt.raw ? value : esc(value));\n  // opt.strong = subtotal row: label darkens from muted to ink, both sides bold.\n  const lw = opt.strong ? '700' : '400';\n  const lc = opt.strong ? INK : MUTED;\n  const vw = opt.strong ? '700' : '600';\n  return `<tr>\n  <td style=\"padding:9px 0;border-bottom:1px solid ${LINE};font:${lw} 14px/1.45 ${F};color:${lc};\">${esc(label)}</td>\n  <td align=\"right\" style=\"padding:9px 0;border-bottom:1px solid ${LINE};font:${vw} 14px/1.45 ${F};color:${INK};\">${shown}</td>\n</tr>`;\n};\n\nconst cash = (label, path, opt = {}) => {\n  const n = num(path);\n  if ((n === null || (n === 0 && opt.hideZero !== false)) && HIDE_EMPTY) return '';\n  return line(label, fmt(n === null ? 0 : n), opt);\n};\n\nconst badge = (text, tone) => {\n  const c = tone === 'good' ? ['#e4f1e5', '#1b5e20']\n          : tone === 'bad'  ? ['#fdecec', '#9b1c1c']\n          :                   ['#edf0ec', '#4a5546'];\n  return `<span style=\"display:inline-block;padding:3px 11px;border-radius:100px;background:${c[0]};color:${c[1]};font:700 12px/1.5 ${F};\">${esc(text)}</span>`;\n};\n\nconst total = (label, value, tone) => {\n  if (value === null || value === undefined) return '';\n  const solid = tone === 'primary' || tone === 'secondary';\n  const bg = tone === 'primary' ? BRAND : tone === 'secondary' ? ACCENT : SOFT;\n  const fg = solid ? '#ffffff' : BRAND;\n  const lb = solid ? 'rgba(255,255,255,.75)' : MUTED;\n  return `<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"margin-top:14px;background:${bg};border-radius:8px;\">\n  <tr>\n    <td style=\"padding:14px 16px;font:700 12px/1.4 ${F};letter-spacing:.07em;text-transform:uppercase;color:${lb};\">${esc(label)}</td>\n    <td align=\"right\" style=\"padding:14px 16px;font:700 20px/1.2 ${F};color:${fg};white-space:nowrap;\">${esc(value)}</td>\n  </tr>\n</table>`;\n};\n\nconst block = (title, body, tone) => {\n  if (!body || !body.trim()) return '';\n  const c = tone === 'secondary' ? ACCENT : BRAND;\n  return `<tr><td style=\"padding:28px 28px 0;\">\n  <div style=\"padding-bottom:9px;border-bottom:2px solid ${c};font:700 12px/1 ${F};letter-spacing:.12em;text-transform:uppercase;color:${c};\">${esc(title)}</div>\n  <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\">${body}</table>\n</td></tr>`;\n};\n\n/* ── Section: header meta ───────────────────────────────────────────── */\nconst district = upper('group_ct1fu44/district');\nconst pod      = upper('group_ct1fu44/Pod');\nconst role     = tail('group_ct1fu44/Role');\nconst others   = upper('group_ct1fu44/others');\nconst repDate  = asDate(val('group_ct1fu45/Date'));\n\nconst metaCell = (label, value) => (!value && HIDE_EMPTY ? '' : `\n  <td width=\"25%\" style=\"padding:0 8px 0 0;vertical-align:top;\">\n    <div style=\"font:700 10px/1.4 ${F};letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.62);\">${esc(label)}</div>\n    <div style=\"font:700 15px/1.4 ${F};color:#ffffff;\">${esc(value || '—')}</div>\n  </td>`);\n\nconst metaRow = [\n  metaCell('District', district),\n  metaCell('POD', pod),\n  metaCell('Role', role),\n  metaCell('Date', repDate),\n].filter(Boolean).join('');\n\n/* ── Section: sales ─────────────────────────────────────────────────── */\nconst salesBody = [\n  cash('Sales by FTO',       'group_ct1fu45/ftosales'),\n  cash('Sales by VSO',       'group_ct1fu45/vsosales'),\n  cash('Sales by FM',        'group_ct1fu45/fmsales'),\n  cash('Sales by FO',        'group_ct1fu45/fosales'),\n  cash('Sales by MO',        'group_ct1fu45/mosales'),\n  cash('Sales by Referrals', 'group_ct1fu45/referalsales'),\n].join('');\n\nconst odoo     = yn('group_ct1fu45/odoo');\nconst odooTone = odoo ? (/^(YES|Y|TRUE|1)$/.test(odoo) ? 'good' : 'bad') : 'neutral';\nconst totalSales = money('group_ct1fu45/todaytotal');\n\nconst salesExtra = [\n  salesBody ? line('Posted on Odoo', odoo ? badge(odoo, odooTone) : null, { raw: true }) : '',\n].join('');\n\n/* ── Section: customers ─────────────────────────────────────────────── */\nconst customersBody = [\n  cash('Returning customers', 'group_ct1fu46/returning'),\n  cash('New customers',       'group_ct1fu46/new'),\n  cash('Total customers',     'group_ct1fu46/clients', { strong: true }),\n  cash('Farmers aggregated',  'group_ct1fu46/Farmers'),\n].join('');\n\n/* ── Section: split / shared sales ──────────────────────────────────── */\nconst anySplit    = yn('group_ct1fu47/Split');\nconst splitIsYes  = anySplit ? /^(YES|Y|TRUE|1)$/.test(anySplit) : false;\nconst splitRows   = [];\n\nfor (let i = 1; i <= 10; i++) {\n  const shop = val(`group_ct1fu47/shop${i}`);\n  const amt  = num(`group_ct1fu47/split${i}`);\n  if (!shop && (amt === null || amt === 0)) continue;\n  splitRows.push(line(shop ? shop.replace(/_/g, ' ') : `Shop ${i}`, fmt(amt === null ? 0 : amt)));\n}\n\nlet splitBody = '';\nif (splitIsYes || splitRows.length) {\n  splitBody = [\n    line('Any split sale', anySplit ? badge(anySplit, splitIsYes ? 'good' : 'neutral') : null, { raw: true }),\n    cash('Number of split sales', 'group_ct1fu47/split_count', { strong: true }),\n    splitRows.join(''),\n    cash('Total split',            'group_ct1fu47/totalsplit', { strong: true }),\n    cash('Total from your shop',   'group_ct1fu47/self'),\n  ].join('');\n}\nconst splitTotal = money('group_ct1fu47/shared_self');\n\n/* ── Section: payments ──────────────────────────────────────────────── */\nconst payTypes = multi('group_ct1fu48/payment_type');\nconst vchTypes = multi('group_ct1fu48/Voucher');\n\nconst chips = (arr, tone) => {\n  if (!arr.length) return null;\n  const [bg, bd, fg] = tone === 'brand'\n    ? [BRAND_SOFT, BRAND_LINE, BRAND]\n    : [ACCENT_SOFT, ACCENT_LINE, ACCENT];\n  return arr.map((t) => `<span style=\"display:inline-block;margin:0 5px 5px 0;padding:4px 10px;border-radius:5px;background:${bg};border:1px solid ${bd};font:600 12px/1.5 ${F};color:${fg};\">${esc(t)}</span>`).join(' ');\n};\n\nconst vouchers = [\n  ['Bank',                   'group_ct1fu48/bank'],\n  ['Staff voucher',          'group_ct1fu48/staff'],\n  ['Damaged bags voucher',   'group_ct1fu48/damaged_value'],\n  ['Bulk purchase voucher',  'group_ct1fu48/bulk_value'],\n  ['Shop setup voucher',     'group_ct1fu48/shop_value'],\n  ['OAF voucher',            'group_ct1fu48/oaf_value'],\n  ['Promo purchase voucher', 'group_ct1fu48/promo_value'],\n  ['Incentive voucher',      'group_ct1fu48/incentive_value'],\n  ['Insurance payout',       'group_ct1fu48/payout_value'],\n  ['FOPS voucher',           'group_ct1fu48/fops_value'],\n  ['Bundle promo voucher',   'group_ct1fu48/bundle_value'],\n];\n\nconst paymentBody = [\n  line('Payment type', chips(payTypes), { raw: true }),\n  line('Voucher type', chips(vchTypes, 'brand'), { raw: true }),\n  vouchers.map(([label, path]) => cash(label, path)).join(''),\n].join('');\n\nconst totalPayment = money('group_ct1fu48/totalpayment');\n\n/* ── Section: unposted ──────────────────────────────────────────────── */\nconst hasUnposted   = yn('group_ct1fu49/Do_You_Have_Unposted_Amounts');\nconst unpostedIsYes = hasUnposted ? /^(YES|Y|TRUE|1)$/.test(hasUnposted) : false;\nconst comment       = val('group_ct1fu49/Any_Comment');\n\nconst unpostedBody = [\n  line('Any unposted amount', hasUnposted ? badge(hasUnposted, unpostedIsYes ? 'bad' : 'good') : null, { raw: true }),\n  cash('Unposted amount', 'group_ct1fu49/How_Much_Unposted_Amount_do_you_have'),\n  comment\n    ? `<tr><td colspan=\"2\" style=\"padding:12px 0 0;\">\n         <div style=\"font:700 10px/1.4 ${F};letter-spacing:.1em;text-transform:uppercase;color:${MUTED};padding-bottom:5px;\">Comments</div>\n         <div style=\"padding:12px 14px;background:${SOFT};border-left:3px solid ${BRAND};border-radius:0 6px 6px 0;font:400 14px/1.55 ${F};color:${INK};\">${esc(comment)}</div>\n       </td></tr>`\n    : '',\n].join('');\n\n/* ── Recipient + subject ────────────────────────────────────────────── */\nconst email = String(row.col_2 || row.Email || row.email || '').trim();\nif (!email || !/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email)) {\n  throw new Error(\n    `No valid recipient e-mail for KoBo user \"${k._submitted_by}\". ` +\n    `Check the \"Kobo Username\" -> \"col_2\" mapping in Sheet16. Got: \"${email}\"`\n  );\n}\n\nconst subject = ['Cash Sales KPI Response', pod, repDate].filter(Boolean).join(' · ');\nconst preheader = [\n  totalSales ? `Total sales ${totalSales}` : null,\n  totalPayment ? `Payments ${totalPayment}` : null,\n  unpostedIsYes ? 'Unposted amount flagged' : null,\n].filter(Boolean).join(' · ');\n\nconst submitted = asDate(val('_submission_time'), true) || asDate(k._submission_time, true);\n\n/* ── Assemble ───────────────────────────────────────────────────────── */\nconst html = `<!DOCTYPE html>\n<html lang=\"en\"><head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"color-scheme\" content=\"light only\">\n<meta name=\"supported-color-schemes\" content=\"light only\">\n<title>${esc(subject)}</title>\n<style>\n  body{margin:0;padding:0;width:100%!important;-webkit-text-size-adjust:100%;}\n  table{border-collapse:collapse;}\n  img{border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;}\n  a{color:${BRAND};}\n  @media only screen and (max-width:620px){\n    .card{width:100%!important;border-radius:0!important;}\n    .pad{padding-left:18px!important;padding-right:18px!important;}\n    .meta td{display:block!important;width:100%!important;padding:0 0 12px!important;}\n  }\n</style>\n</head>\n<body style=\"margin:0;padding:0;background:${PAGE};\">\n<div style=\"display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px;line-height:1px;color:${PAGE};\">${esc(preheader)}&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;</div>\n\n<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:${PAGE};\">\n<tr><td align=\"center\" style=\"padding:24px 12px;\">\n\n  <table role=\"presentation\" class=\"card\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"width:600px;max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(16,24,40,.08);\">\n\n    <tr><td style=\"font-size:0;line-height:0;\">\n      <img src=\"${BANNER}\" alt=\"\" width=\"600\" style=\"width:100%;max-width:600px;height:auto;display:block;\">\n    </td></tr>\n\n    <tr><td class=\"pad\" style=\"padding:26px 28px 22px;background:${BRAND};\">\n      <div style=\"font:700 20px/1.3 ${F};color:#ffffff;\">Your KPI response</div>\n      <div style=\"font:400 13px/1.5 ${F};color:rgba(255,255,255,.72);padding-top:4px;\">Cash sales submission received${submitted ? ` &middot; ${esc(submitted)}` : ''}</div>\n      ${metaRow ? `<table role=\"presentation\" class=\"meta\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"margin-top:20px;padding-top:18px;border-top:1px solid rgba(255,255,255,.22);\"><tr>${metaRow}</tr></table>` : ''}\n      ${others ? `<div style=\"margin-top:14px;font:400 12px/1.5 ${F};color:rgba(255,255,255,.72);\">Others: <span style=\"color:#fff;font-weight:600;\">${esc(others)}</span></div>` : ''}\n    </td></tr>\n\n    ${block('Sales', salesBody + salesExtra)}\n    ${totalSales ? `<tr><td class=\"pad\" style=\"padding:0 28px;\">${total('Total sales today', totalSales, 'primary')}</td></tr>` : ''}\n\n    ${block('Customers', customersBody)}\n\n    ${block('Shared / split sales', splitBody)}\n    ${splitBody && splitTotal ? `<tr><td class=\"pad\" style=\"padding:0 28px;\">${total('Total (split + own shop)', splitTotal)}</td></tr>` : ''}\n\n    ${block('Payment details', paymentBody, 'secondary')}\n    ${totalPayment ? `<tr><td class=\"pad\" style=\"padding:0 28px;\">${total('Total payment', totalPayment, 'secondary')}</td></tr>` : ''}\n\n    ${block('Unposted amount', unpostedBody)}\n\n    <tr><td class=\"pad\" style=\"padding:30px 28px 26px;\">\n      <div style=\"border-top:1px solid ${LINE};padding-top:16px;font:400 12px/1.6 ${F};color:${MUTED};\">\n        Automated confirmation of your cash sales KPI submission${k._submitted_by ? ` from <strong style=\"color:${INK};\">${esc(k._submitted_by)}</strong>` : ''}.<br>\n        Please do not reply to this e-mail &mdash; contact your district lead if any figure above looks wrong.\n      </div>\n    </td></tr>\n\n  </table>\n\n</td></tr>\n</table>\n</body></html>`;\n\nreturn { json: { email, subject, html } };\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        0
+      ],
+      "id": "e77e3964-418c-4084-9a88-36526e875113",
+      "name": "Build KPI Email"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Recon Tracker",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID_HERE/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1444546616,
+          "mode": "list",
+          "cachedResultName": "Sheet16",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID_HERE/edit#gid=1444546616"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Kobo Username",
+              "lookupValue": "={{ $json._submitted_by }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        80,
+        0
+      ],
+      "id": "8c4894df-59a3-4b1c-83b8-ea78dc8cf3e9",
+      "name": "Get row(s) in sheet1",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "XRGDOnwlE4QYv55c",
+          "name": "Google Sheets account 22"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        496,
+        0
+      ],
+      "id": "3076caab-0a02-4dcf-97de-6fd8e59d3167",
+      "name": "Send a message1",
+      "webhookId": "1f6823e7-72d4-452e-b6c6-700b89243c84",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "efGxUrcZ0CRM2e4y",
+          "name": "Gmail Work Mail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "messageId": "={{ $json.id }}"
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        704,
+        0
+      ],
+      "id": "6a17044a-3cd9-4da0-b297-1f3a738c6a1b",
+      "name": "Delete a message1",
+      "webhookId": "ba494247-af2a-4a3c-b2ed-9877e9527ff4",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "efGxUrcZ0CRM2e4y",
+          "name": "Gmail Work Mail"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "formId": "abX9EKNn6y7acHdCeCd83X",
+        "formatOptions": {}
+      },
+      "type": "n8n-nodes-base.koBoToolboxTrigger",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        0
+      ],
+      "id": "550b2d63-d72a-4e7b-8d4a-fb463a88504a",
+      "name": "KoBoToolbox Trigger",
+      "webhookId": "8f013d3f-302b-4ed6-97cb-ef217461fa09",
+      "credentials": {
+        "koBoToolboxApi": {
+          "id": "TLBs1Eg4IQEqPrsz",
+          "name": "KoBoToolbox Token survey 2"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "KoBoToolbox Trigger": [
+      {
+        "json": {
+          "_id": 11526594,
+          "formhub/uuid": "f212f8ffc67a461a97c78fd9a065783b",
+          "start": "2026-09-14T12:00:34.450+01:00",
+          "end": "2026-09-14T12:03:54.713+01:00",
+          "group_ct1fu44/district": "minna",
+          "group_ct1fu44/Pod": "vsopod",
+          "group_ct1fu44/Role": "shop_vso",
+          "group_ct1fu45/Date": "2026-09-14",
+          "group_ct1fu45/othersales": "0",
+          "group_ct1fu45/odoo": "540000",
+          "group_ct1fu46/returning": "0",
+          "group_ct1fu46/new": "20",
+          "group_ct1fu46/clients": "20",
+          "group_ct1fu46/Customers": "20",
+          "group_ct1fu46/Farmers": "0",
+          "group_ct1fu47/Split": "yes",
+          "group_ct1fu47/split_count": "1",
+          "group_ct1fu47/shop1": "obi",
+          "group_ct1fu47/split1": "540000",
+          "group_ct1fu47/total_split": "540000",
+          "group_ct1fu47/totalsplit": "540000",
+          "group_ct1fu47/self": "0",
+          "group_ct1fu47/shared_self": "540000",
+          "group_ct1fu47/sharedself": "540000",
+          "group_ct1fu48/payment_type": "bank_transfer vouchers",
+          "group_ct1fu48/Voucher": "bulk",
+          "group_ct1fu48/bank": "440000",
+          "group_ct1fu48/bulk_value": "100000",
+          "group_ct1fu48/total_payment": "540000",
+          "group_ct1fu48/totalpayment": "540000",
+          "group_ct1fu49/Do_You_Have_Unposted_Amounts": "no",
+          "group_ob4ph20/Is_this_a_Cooperative_sales_": "no",
+          "group_ob4ph20/Any_Comment": "000013260911095711000085585007",
+          "__version__": "vatqwaKkGdCkzDHecPDxia",
+          "meta/instanceID": "uuid:2b8f141f-8bf6-4a50-952c-4472fa071664",
+          "_xform_id_string": "abX9EKNn6y7acHdCeCd83X",
+          "_uuid": "2b8f141f-8bf6-4a50-952c-4472fa071664",
+          "_attachments": [],
+          "_status": "submitted_via_web",
+          "_geolocation": [
+            null,
+            null
+          ],
+          "_submission_time": "2026-09-14T11:03:56",
+          "_tags": [],
+          "_notes": [],
+          "_validation_status": {},
+          "_submitted_by": "hamzalee"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Build KPI Email": {
+      "main": [
+        [
+          {
+            "node": "Send a message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet1": {
+      "main": [
+        [
+          {
+            "node": "Build KPI Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message1": {
+      "main": [
+        [
+          {
+            "node": "Delete a message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KoBoToolbox Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "059a3cb6-91cf-4213-811e-c2cb30c4bcb0",
+  "meta": {
+    "instanceId": "example"
+  },
+  "tags": []
+}
